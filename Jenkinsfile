@@ -2,8 +2,8 @@ pipeline {
     agent any
     
     environment {
-        DOCKERHUB_CREDENTIALS = credentials('docker-hub-credentials')
         IMAGE_NAME = 'marvinok26/devops-prac-docker1'
+        IMAGE_TAG = "${env.BUILD_NUMBER}"
     }
     
     stages {
@@ -18,26 +18,18 @@ pipeline {
         stage('Build image') {
             steps {
                 echo 'Building Docker image...'
-                script {
-                    def app = docker.build("${IMAGE_NAME}:${env.BUILD_NUMBER}")
-                    env.DOCKER_IMAGE = "${IMAGE_NAME}:${env.BUILD_NUMBER}"
-                }
+                sh "docker build -t ${IMAGE_NAME}:${IMAGE_TAG} ."
+                sh "docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${IMAGE_NAME}:latest"
                 echo 'Docker image built successfully'
+                sh "docker images | grep ${IMAGE_NAME}"
             }
         }
         
         stage('Test image') {
             steps {
                 echo 'Testing Docker image...'
-                script {
-                    def app = docker.image("${IMAGE_NAME}:${env.BUILD_NUMBER}")
-                    app.inside {
-                        sh 'echo "Basic container test passed"'
-                        sh 'node --version'
-                        sh 'ls -la'
-                        sh 'timeout 5s node server.js || echo "Server test completed"'
-                    }
-                }
+                sh "docker run --rm ${IMAGE_NAME}:${IMAGE_TAG} node --version"
+                sh "docker run --rm ${IMAGE_NAME}:${IMAGE_TAG} ls -la"
                 echo 'Image tests completed successfully'
             }
         }
@@ -45,25 +37,26 @@ pipeline {
         stage('Push image') {
             steps {
                 echo 'Pushing image to DockerHub...'
-                script {
-                    docker.withRegistry('https://index.docker.io/v1/', 'docker-hub-credentials') {
-                        def app = docker.image("${IMAGE_NAME}:${env.BUILD_NUMBER}")
-                        app.push("${env.BUILD_NUMBER}")
-                        app.push("latest")
-                    }
+                withCredentials([usernamePassword(credentialsId: 'docker-hub-credentials', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                    sh 'echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin'
+                    sh "docker push ${IMAGE_NAME}:${IMAGE_TAG}"
+                    sh "docker push ${IMAGE_NAME}:latest"
+                    echo "Successfully pushed ${IMAGE_NAME}:${IMAGE_TAG} and ${IMAGE_NAME}:latest"
                 }
-                echo 'Image pushed to DockerHub successfully'
             }
         }
     }
     
     post {
         always {
-            echo 'Cleaning up...'
+            echo 'Cleaning up local images...'
+            sh "docker rmi ${IMAGE_NAME}:${IMAGE_TAG} || true"
+            sh "docker rmi ${IMAGE_NAME}:latest || true"
             sh 'docker system prune -f'
         }
         success {
             echo 'Pipeline completed successfully!'
+            echo "Check your DockerHub: https://hub.docker.com/r/${IMAGE_NAME}"
         }
         failure {
             echo 'Pipeline failed!'
